@@ -1,0 +1,465 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local zenkai = game:GetService("Players").LocalPlayer.PlayerGui.PlayerInterface.Center.Buttons.List.Zenkai
+for _, connection in pairs(getconnections(zenkai.MouseButton1Click)) do
+    connection:Fire()
+end
+
+local TeleportService = game:GetService("TeleportService")
+
+-- Place IDs for best training spots
+local PLACE_PHYSICAL = 3371469539  -- Best for Attack + Agility (punch dummies)
+local PLACE_ENERGY    = 3336119605  -- Best for Ki + Defense (gravity chamber)
+
+
+-- =======================================
+-- CONFIG - FIXED DELAYS
+-- =======================================
+local FARM_CONFIG = {
+    TRAIN_SPAMS = 100,      -- Key presses per cycle
+    TRAIN_DELAY = 0.04,     -- Between key presses
+    CHECK_DELAY = 0.1,     -- Between stat checks
+    ZENKAI_DELAY = 8,      -- After zenkai
+    KI_TRAIN_KEY = "Q"     -- Ki also uses Q (no teleport)
+}
+
+-- Convert text like "1.2K" to number
+local function textToNumber(text)
+    if not text or text == "" then return 0 end
+    text = text:gsub(",", "")
+    local num = tonumber(text)
+    if num then return num end
+    local last = text:sub(-1):upper()
+    local clean = tonumber(text:match("[%d%.]+"))
+    if not clean then return 0 end
+    if last == "K" then return clean * 1e3
+    elseif last == "M" then return clean * 1e6
+    elseif last == "B" then return clean * 1e9
+    elseif last == "T" then return clean * 1e12
+    else return clean end
+end
+
+-- =======================================
+-- STAT / REQUIREMENT FUNCTIONS
+-- =======================================
+
+-- Get current stat
+local function getStat(statName)
+    local statLabel = playerGui:FindFirstChild("StatsInterface", true)
+    if not statLabel then return 0 end
+    local bar = statLabel:FindFirstChild("Bar", true)
+    if not bar then return 0 end
+    local statFolder = bar:FindFirstChild(statName)
+    if not statFolder then
+        warn(statName .. " stat folder not found!")
+        return 0
+    end
+    local label = statFolder:FindFirstChild("label")
+    if not label then
+        warn(statName .. " label not found!")
+        return 0
+    end
+    return textToNumber(label.Text)
+end
+
+-- Get stat requirement for Zenkai
+local function getRequirement(statName)
+    task.wait(0.2) -- small delay to allow GUI to populate
+
+    local progress = playerGui:WaitForChild("PlayerInterface")
+        :WaitForChild("Center")
+        :WaitForChild("Zenkai")
+        :WaitForChild("Container")
+        :WaitForChild("Progress")
+
+    local bar = progress:WaitForChild(statName .. "Bar")
+    local numberLabel = bar:WaitForChild("Number")
+
+    local text = numberLabel.Text or ""
+    -- Split by "/" and take second part for requirement
+    local reqText = text:match(".*/(.*)") or text
+    reqText = reqText:gsub("%s", "") -- remove spaces
+
+    return textToNumber(reqText)
+end
+
+
+-- Check if needs training
+local function needsTraining(statName)
+    local current = getStat(statName)
+    local required = getRequirement(statName)
+    return current < required
+end
+
+-- =======================================
+-- Remaining code unchanged
+-- =======================================
+
+local function spamKey(keyCode, count)
+    for i = 1, count do
+        pcall(function()
+            VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+            task.wait(FARM_CONFIG.TRAIN_DELAY)
+            VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+        end)
+        task.wait(0.04)
+    end
+end
+
+-- =======================================
+-- DO ZENKAI FUNCTION
+-- =======================================
+local function doZenkai()
+    -- Navigate to the button
+    local success, button = pcall(function()
+        return game.Players.LocalPlayer.PlayerGui:WaitForChild("PlayerInterface")
+            :WaitForChild("Center")
+            :WaitForChild("Zenkai")
+            :WaitForChild("Info")
+            :WaitForChild("Zenkai")
+            :WaitForChild("ZenkaiButton")
+    end)
+
+    if not success or not button then
+        warn("âŒ Zenkai button not found")
+        return false
+    end
+
+    -- Get MouseButton1Click connections
+    local ok, connections = pcall(function()
+        return getconnections(button.MouseButton1Click)
+    end)
+
+    if not ok or not connections or #connections == 0 then
+        warn("âŒ No valid connections found for Zenkai")
+        return false
+    end
+
+    -- Fire first valid connection safely
+    local fired = false
+    for _, conn in pairs(connections) do
+        pcall(function()
+            conn.Function(button)
+            fired = true
+        end)
+        if fired then break end
+    end
+
+    if fired then
+        print("Zenkai triggered successfully")
+        return true
+    else
+        warn("Failed to trigger Zenkai")
+        return false
+    end
+end
+
+-- AUTO TELEPORT TO CORRECT PLACE
+local currentTrainingType = nil
+
+local function teleportIfNeeded()
+    local shouldBeInPhysical = needsTraining("Agility") or needsTraining("Attack")
+    local shouldBeInEnergy    = needsTraining("Defense") or needsTraining("Ki")
+
+    local targetPlaceId = nil
+    local newType = nil
+
+    if shouldBeInPhysical then
+        targetPlaceId = PLACE_PHYSICAL
+        newType = "PHYSICAL"
+    elseif shouldBeInEnergy then
+        targetPlaceId = PLACE_ENERGY
+        newType = "ENERGY"
+    end
+
+    -- Only teleport if we actually need to switch
+    if targetPlaceId and game.PlaceId ~= targetPlaceId then
+        print("Teleporting to better training spot... (" .. (newType == "PHYSICAL" and "Attack/Agility" or "Ki/Defense") .. ")")
+        TeleportService:Teleport(targetPlaceId, player)
+        task.wait(15) -- Wait for full load
+    end
+end
+
+local autoFarm = false
+local function startFarm()
+    autoFarm = true
+    print("ZENKAI AUTO-FARM STARTED!")
+    print("Priority: Agility â†’ Attack â†’ Defense â†’ Ki â†’ Zenkai")
+    print("Keys: E (Agility/Attack/Ki) | R (Defense) | Q (Ki)")
+
+    spawn(function()
+        while autoFarm do
+            teleportIfNeeded()  -- THIS IS THE ONLY NEW LINE
+
+            if needsTraining("Agility") then
+                print("[1/4] Training Agility...")
+                spamKey(Enum.KeyCode.E, FARM_CONFIG.TRAIN_SPAMS)
+                task.wait(FARM_CONFIG.CHECK_DELAY)
+            elseif needsTraining("Attack") then
+                print("[2/4] Training Attack...")
+                spamKey(Enum.KeyCode.E, FARM_CONFIG.TRAIN_SPAMS)
+                task.wait(FARM_CONFIG.CHECK_DELAY)
+            elseif needsTraining("Defense") then
+                print("[3/4] Training Defense...")
+                spamKey(Enum.KeyCode.R, FARM_CONFIG.TRAIN_SPAMS)
+                task.wait(FARM_CONFIG.CHECK_DELAY)
+            elseif needsTraining("Ki") then
+                print("[4/4] Training Ki...")
+                spamKey(Enum.KeyCode.Q, FARM_CONFIG.TRAIN_SPAMS)
+                task.wait(FARM_CONFIG.CHECK_DELAY)
+            else
+                print("ALL STATS READY â†’ DOING ZENKAI!")
+                local success = doZenkai()
+                if success then
+                    print("ZENKAI SUCCESSFUL! Waiting " .. FARM_CONFIG.ZENKAI_DELAY .. "s...")
+                    task.wait(FARM_CONFIG.ZENKAI_DELAY)
+                else
+                    print("Zenkai failed, retrying in 3s...")
+                    task.wait(1)
+                end
+            end
+            task.wait(0.1)
+        end
+    end)
+end
+local function stopFarm()
+    autoFarm = false
+    print("ðŸ”´ AUTO-FARM STOPPED!")
+end
+
+local function updateStatus()
+    spawn(function()
+        while true do
+            if autoFarm then
+                local agil = needsTraining("Agility") and "ðŸ“ˆ" or "âœ…"
+                local atk = needsTraining("Attack") and "ðŸ“ˆ" or "âœ…"
+                local def = needsTraining("Defense") and "ðŸ“ˆ" or "âœ…"
+                local ki = needsTraining("Ki") and "ðŸ“ˆ" or "âœ…"
+                print(string.format("Status: %sAgility %sAttack %sDefense %sKi", agil, atk, def, ki))
+            end
+            task.wait(1)
+        end
+    end)
+end
+
+-- =======================================
+-- ADVANCED UI (DRAGGABLE + LIVE DATA)
+-- =======================================
+
+local actionStatus = "Idle"
+
+local function setAction(text)
+    actionStatus = text
+end
+
+local liveStats = {
+    Agility = "0/0",
+    Attack = "0/0",
+    Defense = "0/0",
+    Ki = "0/0"
+}
+
+local function updateStatusUI(statusLabel, statsLabel)
+    task.spawn(function()
+        while true do
+            task.wait(0.1)
+
+            for _, stat in pairs({"Agility", "Attack", "Defense", "Ki"}) do
+                local curr = getStat(stat)
+                local req = getRequirement(stat)
+                liveStats[stat] = string.format("%s / %s", curr, req)
+            end
+
+            statusLabel.Text = "âš¡ " .. actionStatus
+
+            statsLabel.Text =
+                "Agility:   " .. liveStats.Agility .. "\n" ..
+                "Attack:    " .. liveStats.Attack .. "\n" ..
+                "Defense:   " .. liveStats.Defense .. "\n" ..
+                "Ki:        " .. liveStats.Ki
+        end
+    end)
+end
+local function createGUI()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "ZenkaiFarmGUI"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = playerGui
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 260, 0, 230)
+    frame.Position = UDim2.new(0.5, -130, 0.5, -115)
+    frame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    frame.BorderSizePixel = 0
+    frame.Parent = screenGui
+
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+    local stroke = Instance.new("UIStroke", frame)
+    stroke.Thickness = 1.5
+    stroke.Color = Color3.fromRGB(255, 200, 0)
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 32)
+    title.BackgroundTransparency = 1
+    title.Text = "Zenkai Farm"
+    title.TextColor3 = Color3.fromRGB(255, 215, 0)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 22
+    title.Parent = frame
+
+    local toggleBtn = Instance.new("TextButton")
+    toggleBtn.Size = UDim2.new(0.85, 0, 0, 40)
+    toggleBtn.Position = UDim2.new(0.075, 0, 0, 40)
+    toggleBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    toggleBtn.Text = "Stop"
+    toggleBtn.TextColor3 = Color3.new(1, 1, 1)
+    toggleBtn.Font = Enum.Font.GothamBold
+    toggleBtn.TextSize = 20
+    toggleBtn.Parent = frame
+    Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 8)
+    local btnStroke = Instance.new("UIStroke", toggleBtn)
+    btnStroke.Color = Color3.fromRGB(255, 70, 70)
+    btnStroke.Thickness = 1.5
+
+    local status = Instance.new("TextLabel")
+    status.Size = UDim2.new(1, -10, 0, 30)
+    status.Position = UDim2.new(0, 5, 0, 90)
+    status.BackgroundTransparency = 1
+    status.Text = "Farming Active"
+    status.TextColor3 = Color3.fromRGB(0, 255, 150)
+    status.Font = Enum.Font.GothamSemibold
+    status.TextSize = 18
+    status.TextXAlignment = Enum.TextXAlignment.Left
+    status.Parent = frame
+
+    local statsLabel = Instance.new("TextLabel")
+    statsLabel.Size = UDim2.new(1, -16, 0, 100)
+    statsLabel.Position = UDim2.new(0, 8, 0, 120)
+    statsLabel.BackgroundTransparency = 1
+    statsLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+    statsLabel.Font = Enum.Font.Gotham
+    statsLabel.TextSize = 15
+    statsLabel.TextXAlignment = Enum.TextXAlignment.Left
+    statsLabel.TextYAlignment = Enum.TextYAlignment.Top
+    statsLabel.Text = "Loading..."
+    statsLabel.Parent = frame
+
+    updateStatusUI(status, statsLabel)
+
+    -- DRAGGABLE UI (MOBILE + PC)
+    local dragging = false
+    local dragStart = nil
+    local startPos = nil
+
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input:Capture()
+        end
+    end)
+
+    frame.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+
+    frame.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    -- PRESS N FUNCTION
+    local function pressN()
+        task.wait(1)
+        print("Pressing N...")
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.N, false, game)
+        task.wait(0.1)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.N, false, game)
+    end
+
+    -- PRESS N ON FIRST LOAD (before farming starts)
+    task.spawn(function()
+        task.wait(3)
+        pressN()
+    end)
+
+    -- PRESS N EVERY TIME CHARACTER RESPAWNS
+    player.CharacterAdded:Connect(function()
+        task.wait(4)
+        pressN()
+    end)
+
+    -- TOGGLE BUTTON: Stop = really stops | Start = starts normally
+    local farming = true
+    startFarm()  -- Auto-start
+
+    toggleBtn.MouseButton1Click:Connect(function()
+        farming = not farming
+
+        if farming then
+            startFarm()
+            toggleBtn.Text = "Stop"
+            toggleBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+            btnStroke.Color = Color3.fromRGB(255, 70, 70)
+            setAction("Farming Active")
+        else
+            stopFarm()
+            toggleBtn.Text = "Start Farming"
+            toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 0)
+            btnStroke.Color = Color3.fromRGB(0, 255, 0)
+            setAction("Stopped")
+        end
+    end)
+end
+
+createGUI()
+
+-- Test stats on load
+task.wait(2)
+print("ðŸ“Š Initial Stat Check:")
+for _, stat in pairs({"Agility", "Attack", "Defense", "Ki"}) do
+    local current = getStat(stat)
+    local req = getRequirement(stat)
+    print(string.format("%s: %s / %s %s", stat, current, req, current < req and "ðŸ“ˆ NEEDS TRAINING" or "âœ… READY"))
+end
+-- FIXED AUTO-RESET: Handles "100K/100K", "1K/1K", "100,000/100K", etc. → Only resets if ≤15
+task.spawn(function()
+    while true do
+        task.wait(2)  -- Safer, slower checks
+
+        pcall(function()
+            local pg = game:GetService("Players").LocalPlayer.PlayerGui
+            local path = pg.PlayerInterface.Bottom.Frame:GetChildren()[3]
+
+            if path and path:FindFirstChild("Value") then
+                local t = path.Value.Text  -- "100K/100K" or "1K/1K" or "15/100"
+                
+                -- Parse LEFT side (before "/") → handles K/M/B/commas up to 100K+
+                local leftText = t:match("^(.*)/") or t
+                local leftNum = textToNumber(leftText:gsub("%s+", ""))  -- Clean spaces too
+
+                if leftNum <= 15 then
+                    print("Low rebirths (" .. leftNum .. ") → Resetting to save!")
+                    local char = game:GetService("Players").LocalPlayer.Character
+                    if char then
+                        char:BreakJoints()
+                    end
+                end
+            end
+        end)
+    end
+end)
