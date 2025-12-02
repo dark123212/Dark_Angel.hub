@@ -22,8 +22,8 @@ local PLACE_ENERGY    = 3336119605  -- Best for Ki + Defense (gravity chamber)
 -- CONFIG - FIXED DELAYS
 -- =======================================
 local FARM_CONFIG = {
-    TRAIN_SPAMS = 100,      -- Key presses per cycle
-    TRAIN_DELAY = 0.04,     -- Between key presses
+    TRAIN_SPAMS = 200,      -- Key presses per cycle
+    TRAIN_DELAY = 0.1,     -- Between key presses
     CHECK_DELAY = 0.1,     -- Between stat checks
     ZENKAI_DELAY = 8,      -- After zenkai
     KI_TRAIN_KEY = "Q"     -- Ki also uses Q (no teleport)
